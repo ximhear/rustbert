@@ -3,7 +3,7 @@ use std::ffi::CStr;
 use tokenizers::{Tokenizer, EncodeInput, InputSequence};
 
 #[no_mangle]
-pub extern "C" fn process_string(input: *const c_char) -> *mut Vec<c_int> {
+pub extern "C" fn process_string(input: *const c_char) -> *mut ProcessedResult {
     let input_str = unsafe {
         assert!(!input.is_null());
         CStr::from_ptr(input).to_string_lossy().into_owned()
@@ -22,35 +22,40 @@ pub extern "C" fn process_string(input: *const c_char) -> *mut Vec<c_int> {
     };
 
     let ids = encoding.get_ids();
-    println!("{:?}", ids);
-    println!("{:?}", encoding.get_attention_mask());
+    let masks = encoding.get_attention_mask();
     let result_vec: Vec<c_int> = ids.iter().map(|&id| id as c_int).collect();
-    println!("{:?}", result_vec);
+    let mask_vec: Vec<c_int> = masks.iter().map(|&mask| mask as c_int).collect();
+    println!("{:?}", ids);
+    println!("{:?}", masks);
 
-    // Allocate memory for the vector in C++ heap
-    let result_ptr = Box::into_raw(Box::new(result_vec));
-    println!("{:?}", result_ptr);
+    // Allocate memory for the ProcessedResult struct in C++ heap
+    let result = Box::new(ProcessedResult {
+        result_vec: result_vec.as_ptr(),
+        result_len: result_vec.len(),
+        mask_vec: mask_vec.as_ptr(),
+        mask_len: mask_vec.len(),
+        result_box: Some(result_vec),
+        mask_box: Some(mask_vec),
+    });
 
-    result_ptr
+    Box::into_raw(result)
 }
 
 #[no_mangle]
-pub extern "C" fn get_result_size(result: *const Vec<c_int>) -> usize {
-    let result_vec = unsafe { &*result };
-    result_vec.len()
-}
-
-#[no_mangle]
-pub extern "C" fn get_result_data(result: *const Vec<c_int>) -> *const c_int {
-    let result_vec = unsafe { &*result };
-    result_vec.as_ptr()
-}
-
-#[no_mangle]
-pub extern "C" fn free_result(result: *mut Vec<c_int>) {
-    if !result.is_null() {
-        unsafe {
-            Box::from_raw(result);
-        }
+pub extern "C" fn free_processed_result(ptr: *mut ProcessedResult) {
+    if !ptr.is_null() {
+        let result = unsafe { Box::from_raw(ptr) };
+        drop(result.result_box);
+        drop(result.mask_box);
     }
+}
+
+#[repr(C)]
+pub struct ProcessedResult {
+    result_vec: *const c_int,
+    result_len: usize,
+    mask_vec: *const c_int,
+    mask_len: usize,
+    result_box: Option<Vec<c_int>>,
+    mask_box: Option<Vec<c_int>>,
 }
